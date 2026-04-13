@@ -2,14 +2,13 @@ name: Build, Scan & Push Secure Image
 
 on:
   workflow_run:
-    # ⚠️ REPLACE "Snyk Scan" with the EXACT 'name:' found at the top of your snyk.yaml
-    workflows: ["Snyk Scan"]
+    workflows: ["Snyk Scan"]   # ⚠️ must match EXACT workflow name
     types:
       - completed
     branches:
       - main
       - muvvaalaakash-ci-pipeline
-  # 📥 This section enables manual triggering with parameters
+
   workflow_dispatch:
     inputs:
       docker_tag:
@@ -22,36 +21,43 @@ env:
 
 jobs:
   docker-security-scan:
-    # This allows it to run IF manually triggered OR IF the upstream Snyk workflow succeeded
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+
     steps:
+      # ✅ Checkout
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 🔢 Step 1: Determine Version (Manual Input vs Auto)
+      # 🔢 Version Handling (Manual OR Auto)
       - name: Set Version
-        id: version
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.docker_tag }}" >> $GITHUB_ENV
-            echo "Using manual tag: ${{ github.event.inputs.docker_tag }}"
+            VERSION="${{ github.event.inputs.docker_tag }}"
+            echo "VERSION=$VERSION" >> $GITHUB_ENV
+            echo "Manual trigger → using tag: $VERSION"
           else
-            # Your existing auto-increment logic
             VERSION_FILE="version.txt"
-            if [ ! -f $VERSION_FILE ]; then echo "v1.0.0" > $VERSION_FILE; fi
+
+            if [ ! -f $VERSION_FILE ]; then
+              echo "v1.0.0" > $VERSION_FILE
+            fi
+
             CURRENT=$(cat $VERSION_FILE)
             MAJOR=$(echo $CURRENT | cut -d. -f1 | tr -d 'v')
             MINOR=$(echo $CURRENT | cut -d. -f2)
             PATCH=$(echo $CURRENT | cut -d. -f3)
+
             PATCH=$((PATCH + 1))
             NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
+
             echo $NEW_VERSION > $VERSION_FILE
             echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
-            echo "Using auto-generated tag: $NEW_VERSION"
+
+            echo "Auto trigger → using tag: $NEW_VERSION"
           fi
 
-      # 🐳 Step 2: Build Image
+      # 🐳 Build Image
       - name: Build Docker image
         run: |
           docker build -t $IMAGE_NAME:${{ env.VERSION }} .
@@ -59,40 +65,52 @@ jobs:
       # 🔧 Install Trivy
       - name: Install Trivy
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+          | sudo sh -s -- -b /usr/local/bin
 
-      # 📄 Download HTML template
+      # 📄 Download Trivy Template
       - name: Download Trivy Template
         run: |
           mkdir -p trivy-templates
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl -o trivy-templates/html.tpl
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
+          -o trivy-templates/html.tpl
 
-      # 🔍 Step 3: Scan
-      - name: Trivy Scan (Fail on CRITICAL)
-        continue-on-error: true
+      # 🔍 Security Scan (FAIL if vulnerabilities found)
+      - name: Trivy Scan (Fail on HIGH/CRITICAL)
         run: |
           trivy image --exit-code 1 --severity HIGH,CRITICAL $IMAGE_NAME:${{ env.VERSION }}
 
-      # 📊 Step 4: Generate report
+      # 📊 Generate Report (only if scan passes)
       - name: Generate Trivy Report
         if: success()
         run: |
-          trivy image --format template --template "trivy-templates/html.tpl" --output trivy-report.html $IMAGE_NAME:${{ env.VERSION }}
+          trivy image \
+            --format template \
+            --template "trivy-templates/html.tpl" \
+            --output trivy-report.html \
+            $IMAGE_NAME:${{ env.VERSION }}
 
-      # 🔐 Step 5: Docker Login
+      # 🔐 Docker Login
       - name: Login to DockerHub
         if: success()
         run: |
-          echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USERNAME }} --password-stdin
+          echo ${{ secrets.DOCKER_PASSWORD }} | docker login \
+          -u ${{ secrets.DOCKER_USERNAME }} --password-stdin
 
-      # 🚀 Step 6: Push Image
+      # 🚀 Push Image (version + latest)
       - name: Push Image
         if: success()
         run: |
-          docker tag $IMAGE_NAME:${{ env.VERSION }} ${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:${{ env.VERSION }}
-          docker push ${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:${{ env.VERSION }}
+          docker tag $IMAGE_NAME:${{ env.VERSION }} \
+          ${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:${{ env.VERSION }}
 
-      # 📧 Step 7: Email Report
+          docker tag $IMAGE_NAME:${{ env.VERSION }} \
+          ${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:latest
+
+          docker push ${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:${{ env.VERSION }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME:latest
+
+      # 📧 Email Report (always runs)
       - name: Email Report
         if: always()
         uses: dawidd6/action-send-mail@v3
