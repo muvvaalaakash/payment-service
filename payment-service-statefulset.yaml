@@ -22,7 +22,7 @@ spec:
         command: ['sh', '-c', 'echo "Waiting for MongoDB..."; until nc -z mongodb 27017; do sleep 2; done; echo "MongoDB is ready!"']
       containers:
       - name: payment-service
-        image: team4devops/ecommerce-payment-service:v1.0.0
+        image: mvnsakash/payment:latest
         ports:
         - containerPort: 3009
         env:
@@ -38,6 +38,12 @@ spec:
             secretKeyRef:
               name: clahanstore-secrets
               key: MONGO_URI_PAYMENT
+        - name: KEYCLOAK_URL
+          value: "http://keycloak.default.svc.cluster.local:8080/auth"
+        - name: KEYCLOAK_REALM
+          value: "ecommerce"
+        - name: KEYCLOAK_CLIENT_ID
+          value: "payment-service"
         resources:
           requests:
             cpu: 25m
