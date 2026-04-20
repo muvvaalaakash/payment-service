@@ -8,6 +8,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const { initKeycloak } = require('./keycloak');
+const keycloak = initKeycloak(app);
+
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://mongodb:27017/paymentdb';
 mongoose.connect(MONGO_URI).then(() => console.log('Payment Service: MongoDB connected')).catch(err => console.error(err));
 
@@ -28,7 +31,7 @@ const Payment = mongoose.model('Payment', paymentSchema);
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'payment-service' }));
 
 // Process payment
-app.post('/payments/process', async (req, res) => {
+app.post('/payments/process', keycloak.protect(), async (req, res) => {
   try {
     const { orderId, userId, amount, method, cardNumber } = req.body;
     const transactionId = 'TXN' + Date.now() + Math.random().toString(36).substr(2, 9).toUpperCase();
@@ -56,7 +59,7 @@ app.post('/payments/process', async (req, res) => {
 });
 
 // Get payment by order
-app.get('/payments/:orderId', async (req, res) => {
+app.get('/payments/:orderId', keycloak.protect(), async (req, res) => {
   try {
     const payment = await Payment.findOne({ orderId: req.params.orderId });
     if (!payment) return res.status(404).json({ error: 'Payment not found' });
@@ -65,7 +68,7 @@ app.get('/payments/:orderId', async (req, res) => {
 });
 
 // Get all payments (admin)
-app.get('/payments', async (req, res) => {
+app.get('/payments', keycloak.protect(), async (req, res) => {
   try {
     const payments = await Payment.find().sort({ createdAt: -1 });
     res.json(payments);
@@ -73,7 +76,7 @@ app.get('/payments', async (req, res) => {
 });
 
 // Refund
-app.post('/payments/:paymentId/refund', async (req, res) => {
+app.post('/payments/:paymentId/refund', keycloak.protect(), async (req, res) => {
   try {
     const payment = await Payment.findByIdAndUpdate(req.params.paymentId, { status: 'refunded' }, { new: true });
     res.json({ message: 'Refund processed', payment });
